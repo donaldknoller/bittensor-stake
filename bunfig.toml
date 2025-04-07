@@ -1,0 +1,20 @@
+[test]
+# Use the setup file for tests
+preload = ["src/__tests__/setup.ts"]
+
+# Use a specific file pattern for tests
+pattern = "**/*.test.ts"
+
+# Display coverage information
+coverage = true
+
+[install]
+# Use exact dependencies
+exact = true
+
+# Do not generate a lockfile
+lockfile = true
+
+[debug]
+# Set log level
+logLevel = "error" 

@@ -1,0 +1,125 @@
+import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { DelegationService } from "@/services/delegationService";
+import { BitensorApi } from "@/core/api";
+import { DelegatedStake } from "@/core/models"; // Import DelegatedStake
+
+// Mock BitensorApi more specifically
+const mockGetDelegate = mock((_publicKey: Uint8Array) => {
+  const keyStr = _publicKey.toString(); // Simple way to differentiate keys in mock
+  console.log("Mock getDelegate called with key:", keyStr); // Debug log
+
+  // Return data only if key is '1' (representing 'hotkey1')
+  if (keyStr === '1') {
+    return Promise.resolve({
+      toJSON: () => ({ 
+        nominators: [
+          ["delegator1", [[1, 500000000]]], // Netuid 1
+          ["delegator2", [[2, 300000000]]] // Netuid 2
+        ]
+      })
+    });
+  } else {
+    // Return empty for other keys (like '0' representing 'hotkey_no_delegations')
+    return Promise.resolve({
+      toJSON: () => ({ nominators: [] })
+    });
+  }
+});
+
+const mockApiInstance = { 
+  call: { 
+    delegateInfoRuntimeApi: { 
+      getDelegate: mockGetDelegate
+    }
+  }
+};
+
+// Mock the instance method and the static method
+mock.module('@/core/api', () => ({
+  BitensorApi: class MockBitensorApi {
+    getApi = mock(() => Promise.resolve(mockApiInstance));
+    // Static method mock MUST be defined correctly on the class itself
+    static decodeHotkey = mock((hotkey: string): Uint8Array => {
+      console.log("Mock decodeHotkey called with:", hotkey); // Debug log
+      if (hotkey === "hotkey1") {
+        return new Uint8Array([1]);
+      } else if (hotkey === "hotkey_no_delegations") {
+        return new Uint8Array([0]);
+      } else {
+        // Default or error case
+        return new Uint8Array([2]); 
+      }
+    });
+  },
+  DEFAULT_ENDPOINT: 'wss://mock.endpoint'
+}));
+
+describe("DelegationService", () => {
+  let delegationService: DelegationService;
+  let api: BitensorApi;
+
+  beforeEach(() => {
+    // Reset mocks if needed (Bun might do this automatically)
+    mockGetDelegate.mockClear();
+
+    api = new BitensorApi(); // Creates instance of the mocked class
+    // Instantiate service for netuid 1
+    delegationService = new DelegationService(api, 1);
+  });
+
+  test("should get delegations for hotkeys in the specified netuid", async () => {
+    const hotkeys = ["hotkey1"]; 
+    const delegations = await delegationService.getDelegationsForHotkeys(hotkeys);
+
+    expect(delegations).toBeInstanceOf(Map);
+    expect(delegations.size).toBe(1); // Should still be 1 for hotkey1
+    expect(delegations.has("hotkey1")).toBe(true);
+    const hotkey1Delegations = delegations.get("hotkey1");
+    expect(hotkey1Delegations).toBeDefined();
+    expect(hotkey1Delegations!).toHaveLength(1); // Only netuid 1 stake should be included
+    // Check the content carefully based on the mock and filtering logic
+    const expectedDelegation: DelegatedStake = {
+      hotkey: "delegator1", // Delegator hotkey
+      stake: 500000000,
+      netuid: 1
+    };
+    expect(hotkey1Delegations!).toEqual([expectedDelegation]); 
+  });
+
+  test("should return empty map if no delegations found for hotkeys", async () => {
+    const hotkeys = ["hotkey_no_delegations"]; 
+    // decodeHotkey will return Uint8Array([0])
+    // getDelegate should return { nominators: [] } for key '0'
+    const delegations = await delegationService.getDelegationsForHotkeys(hotkeys);
+    
+    console.log("Test 'empty map': Delegations received:", delegations); // Debug log
+
+    expect(delegations).toBeInstanceOf(Map);
+    expect(delegations.size).toBe(0); // Should now be 0
+  });
+  
+  test("getAllDelegations should throw error if no hotkeys provided", async () => {
+    // This test assumes getAllDelegations without args throws
+    // Check the implementation: it does throw if hotkeys is empty/undefined
+    await expect(delegationService.getAllDelegations()).rejects.toThrow(
+      'No hotkeys provided and automatic discovery not implemented'
+    );
+  });
+
+  test("hasDelegations should return true if hotkey has delegations", async () => {
+    const hotkey = "hotkey1"; 
+    // Calls getDelegationsForHotkeys(["hotkey1"]) internally
+    // Should return true because getDelegate returns data for key '1'
+    const has = await delegationService.hasDelegations(hotkey);
+    expect(has).toBe(true);
+  });
+
+  test("hasDelegations should return false if hotkey has no delegations", async () => {
+    const hotkey = "hotkey_no_delegations"; 
+    // Calls getDelegationsForHotkeys(["hotkey_no_delegations"]) internally
+    // Should return false because getDelegate returns empty for key '0'
+    const has = await delegationService.hasDelegations(hotkey);
+    expect(has).toBe(false);
+  });
+
+}); 
